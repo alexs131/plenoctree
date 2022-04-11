@@ -35,27 +35,24 @@ python -m octree.extraction \
     --data_dir $DATA_ROOT/$SCENE/ \
     --output $CKPT_ROOT/$SCENE/octrees/tree.npz
 """
+from tqdm import tqdm
+from svox.helpers import _get_c_extension
+from svox import NDCConfig, VolumeRenderer
+from svox import N3Tree
+from octree.nerf import sh_proj
+from octree.nerf import datasets
+from octree.nerf import utils
+from octree.nerf import models
+from absl import flags
+from absl import app
+import os.path as osp
+import numpy as np
+import torch.nn.functional as F
+import torch
 import os
 # Get rid of ugly TF logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-import torch
-import torch.nn.functional as F
-import numpy as np
-import os.path as osp
-
-from absl import app
-from absl import flags
-
-from octree.nerf import models
-from octree.nerf import utils
-from octree.nerf import datasets
-from octree.nerf import sh_proj
-
-from svox import N3Tree
-from svox import NDCConfig, VolumeRenderer
-from svox.helpers import _get_c_extension
-from tqdm import tqdm
 
 _C = _get_c_extension()
 
@@ -145,8 +142,8 @@ flags.DEFINE_bool(
 flags.DEFINE_float(
     "data_bbox_scale",
     1.0,
-    "Scaling factor to apply to the bounding box from dataset (before autoscale), " +
-    "if bbox_from_data is used",
+    "Scaling factor to apply to the bounding box from dataset (before autoscale), "
+    + "if bbox_from_data is used",
 )
 flags.DEFINE_bool(
     "autoscale",
@@ -201,7 +198,8 @@ def calculate_grid_weights(dataset, sigmas, reso, invradius, offset):
     grid_data = sigmas.reshape((reso, reso, reso))
     maximum_weight = torch.zeros_like(grid_data)
     for idx in tqdm(range(dataset.size)):
-        cam.c2w = torch.from_numpy(dataset.camtoworlds[idx]).float().to(sigmas.device)
+        cam.c2w = torch.from_numpy(
+            dataset.camtoworlds[idx]).float().to(sigmas.device)
         grid_weight, grid_hit = _C.grid_weight_render(
             grid_data,
             cam,
@@ -228,7 +226,8 @@ def project_nerf_to_sh(nerf, sh_deg, points):
         # viewdirs: [num_rays, 3]
         # raw_rgb: [num_points, num_rays, 3]
         # sigma: [num_points]
-        raw_rgb, sigma = nerf.eval_points_raw(points, viewdirs, cross_broadcast=True)
+        raw_rgb, sigma = nerf.eval_points_raw(
+            points, viewdirs, cross_broadcast=True)
         return raw_rgb, sigma
 
     coeffs, sigma = sh_proj.ProjectFunctionNeRF(
@@ -265,7 +264,8 @@ def auto_scale(args, center, radius, nerf):
     for i in tqdm(range(0, grid.shape[0], args.chunk)):
         grid_chunk = grid[i:i+args.chunk].cuda()
         if nerf.use_viewdirs:
-            fake_viewdirs = torch.zeros([grid_chunk.shape[0], 3], device=grid_chunk.device)
+            fake_viewdirs = torch.zeros(
+                [grid_chunk.shape[0], 3], device=grid_chunk.device)
         else:
             fake_viewdirs = None
         rgb, sigma = nerf.eval_points_raw(grid_chunk, fake_viewdirs)
@@ -284,6 +284,7 @@ def auto_scale(args, center, radius, nerf):
     lc = grid.min(dim=0)[0] - 0.5 / reso
     uc = grid.max(dim=0)[0] + 0.5 / reso
     return ((lc + uc) * 0.5).tolist(), ((uc - lc) * 0.5).tolist()
+
 
 def step1(args, tree, nerf, dataset):
     print('* Step 1: Grid eval')
@@ -308,9 +309,10 @@ def step1(args, tree, nerf, dataset):
 
     out_chunks = []
     for i in tqdm(range(0, grid.shape[0], args.chunk)):
-        grid_chunk = grid[i:i+args.chunk].cuda()
+        grid_chunk = grid[i:i+args.chunk]  # .cuda()
         if nerf.use_viewdirs:
-            fake_viewdirs = torch.zeros([grid_chunk.shape[0], 3], device=grid_chunk.device)
+            fake_viewdirs = torch.zeros(
+                [grid_chunk.shape[0], 3], device=grid_chunk.device)
         else:
             fake_viewdirs = None
         rgb, sigma = nerf.eval_points_raw(grid_chunk, fake_viewdirs)
@@ -322,9 +324,9 @@ def step1(args, tree, nerf, dataset):
     if FLAGS.masking_mode == "sigma":
         mask = sigmas >= sigma_thresh
     elif FLAGS.masking_mode == "weight":
-        print ("* Calculating grid weights")
+        print("* Calculating grid weights")
         grid_weights = calculate_grid_weights(dataset,
-            sigmas, reso, tree.invradius, tree.offset)
+                                              sigmas, reso, tree.invradius, tree.offset)
         mask = grid_weights.reshape(-1) >= FLAGS.weight_thresh
         del grid_weights
     else:
@@ -334,7 +336,7 @@ def step1(args, tree, nerf, dataset):
     grid = grid[mask]
     del mask
     print(grid.shape, grid.min(), grid.max())
-    grid = grid.cuda()
+    grid = grid  # .cuda()
 
     torch.cuda.empty_cache()
     print(' Building octree')
@@ -347,10 +349,11 @@ def step1(args, tree, nerf, dataset):
         # Do last layer separately
         grid = grid.cpu()
         for j in tqdm(range(0, grid.shape[0], refine_chunk)):
-            tree[grid[j:j+refine_chunk].cuda()].refine()
+            tree[grid[j:j+refine_chunk]].refine()  # .cuda()].refine()
     print(tree)
 
     assert tree.max_depth == args.init_grid_depth
+
 
 def step2(args, tree, nerf):
     print('* Step 2: AA', args.samples_per_cell)
@@ -360,23 +363,26 @@ def step2(args, tree, nerf):
     del leaf_mask
 
     if args.use_viewdirs:
-        chunk_size = args.chunk // (args.samples_per_cell * args.projection_samples // 10)
+        chunk_size = args.chunk // (args.samples_per_cell
+                                    * args.projection_samples // 10)
     else:
         chunk_size = args.chunk // (args.samples_per_cell)
 
     for i in tqdm(range(0, leaf_ind.size(0), chunk_size)):
         chunk_inds = leaf_ind[i:i+chunk_size]
-        points = tree[chunk_inds].sample(args.samples_per_cell)  # (n_cells, n_samples, 3)
+        points = tree[chunk_inds].sample(
+            args.samples_per_cell)  # (n_cells, n_samples, 3)
         points = points.view(-1, 3)
 
         if not args.use_viewdirs:  # trained NeRF-SH/SG model returns rgb as coeffs
             rgb, sigma = nerf.eval_points_raw(points)
-        else:  # vanilla NeRF model returns rgb, so we project them into coeffs (only SH supported)
+        # vanilla NeRF model returns rgb, so we project them into coeffs (only SH supported)
+        else:
             rgb, sigma = project_nerf_to_sh(nerf, args.sh_deg, points)
 
         if tree.data_format.format == tree.data_format.RGBA:
-            rgb = rgb.reshape(-1, args.samples_per_cell, tree.data_dim - 1);
-            sigma = sigma.reshape(-1, args.samples_per_cell, 1);
+            rgb = rgb.reshape(-1, args.samples_per_cell, tree.data_dim - 1)
+            sigma = sigma.reshape(-1, args.samples_per_cell, 1)
             sigma_avg = sigma.mean(dim=1)
 
             reso = 2 ** (args.init_grid_depth + 1)
@@ -390,8 +396,10 @@ def step2(args, tree, nerf):
         else:
             rgba = torch.cat([rgb, sigma], dim=-1)
             del rgb, sigma
-            rgba = rgba.reshape(-1, args.samples_per_cell, tree.data_dim).mean(dim=1)
+            rgba = rgba.reshape(-1, args.samples_per_cell,
+                                tree.data_dim).mean(dim=1)
         tree[chunk_inds] = rgba
+
 
 def euler2mat(angle):
     """Convert euler angles to rotation matrix.
@@ -413,14 +421,15 @@ def euler2mat(angle):
     zmat = torch.stack([torch.stack([cosz,  -sinz, zeros], dim=-1),
                         torch.stack([sinz,   cosz, zeros], dim=-1),
                         torch.stack([zeros, zeros,  ones], dim=-1)], dim=-1)
-    ymat = torch.stack([torch.stack([ cosy, zeros,  siny], dim=-1),
+    ymat = torch.stack([torch.stack([cosy, zeros,  siny], dim=-1),
                         torch.stack([zeros,  ones, zeros], dim=-1),
                         torch.stack([-siny, zeros,  cosy], dim=-1)], dim=-1)
-    xmat = torch.stack([torch.stack([ ones, zeros, zeros], dim=-1),
+    xmat = torch.stack([torch.stack([ones, zeros, zeros], dim=-1),
                         torch.stack([zeros,  cosx, -sinx], dim=-1),
                         torch.stack([zeros,  sinx,  cosx], dim=-1)], dim=-1)
     rotMat = torch.einsum("...ij,...jk,...kq->...iq", xmat, ymat, zmat)
     return rotMat
+
 
 @torch.no_grad()
 def main(unused_argv):
@@ -438,7 +447,8 @@ def main(unused_argv):
         assert FLAGS.sg_global
         extra_data = torch.cat((
                             F.softplus(nerf.sg_lambda[:, None]),
-                            sh_proj.spher2cart(nerf.sg_mu_spher[:, 0], nerf.sg_mu_spher[:, 1])
+                            sh_proj.spher2cart(
+                                nerf.sg_mu_spher[:, 0], nerf.sg_mu_spher[:, 1])
                          ), dim=-1)
     elif FLAGS.sh_deg > 0:
         data_format = f'SH{(FLAGS.sh_deg + 1) ** 2}'
@@ -455,7 +465,8 @@ def main(unused_argv):
     if FLAGS.bbox_from_data:
         assert dataset.bbox is not None  # Dataset must be NSVF
         center = (dataset.bbox[:3] + dataset.bbox[3:6]) * 0.5
-        radius = (dataset.bbox[3:6] - dataset.bbox[:3]) * 0.5 * FLAGS.data_bbox_scale
+        radius = (dataset.bbox[3:6] - dataset.bbox[:3]
+                  ) * 0.5 * FLAGS.data_bbox_scale
         print('Bounding box from data: c', center, 'r', radius)
     else:
         center = list(map(float, FLAGS.center.split()))
@@ -482,7 +493,7 @@ def main(unused_argv):
         assert FLAGS.sh_deg == -1, (
             "You can only use up to one of: SH or SG")
         num_rgb_channels *= FLAGS.sg_dim
-    data_dim =  1 + num_rgb_channels  # alpha + rgb
+    data_dim = 1 + num_rgb_channels  # alpha + rgb
     print('data dim is', data_dim)
 
     print('* Creating model')
@@ -512,7 +523,7 @@ def main(unused_argv):
         dataset = datasets.get_dataset("test", FLAGS)
         print('* Evaluation (before fine tune)')
         avg_psnr, avg_ssim, avg_lpips, out_frames = utils.eval_octree(tree,
-                dataset, FLAGS, want_lpips=True)
+                                                                      dataset, FLAGS, want_lpips=True)
         print('Average PSNR', avg_psnr, 'SSIM', avg_ssim, 'LPIPS', avg_lpips)
 
 
