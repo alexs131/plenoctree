@@ -55,7 +55,7 @@ if __name__ == "__main__":
         rgba = []
         for i in range(points.shape[0]):
             id = idx.get_nns_by_vector(points[i], 1)
-            rgba.append(rgba_data[i])
+            rgba.append(rgba_data[id])
         result = torch.stack(rgba)
         return result[..., :-1], result[..., -1:]
 
