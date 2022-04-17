@@ -169,7 +169,7 @@ flags.DEFINE_float(
 # For integrated eval (to avoid slow load)
 flags.DEFINE_bool(
     "eval",
-    True,
+    False,
     "Evaluate after building the octree",
 )
 
@@ -370,6 +370,9 @@ def step2(args, tree, nerf, idx, rgba_data):
     else:
         chunk_size = args.chunk // (args.samples_per_cell)
     count = 0
+    bb = np.zeros(6)
+    bb.fill(-np.inf)
+    bb[:3] = np.inf
     for i in tqdm(range(0, leaf_ind.size(0), chunk_size)):
         chunk_inds = leaf_ind[i:i+chunk_size]
         points = tree[chunk_inds].sample(
@@ -402,10 +405,16 @@ def step2(args, tree, nerf, idx, rgba_data):
                                 tree.data_dim).mean(dim=1)
         # Copy net output and put points in kNN data structure
         rgba_data.append(rgba.detach().cpu().numpy())
+        bb[:3] = np.minimum(bb[:3], torch.min(points, dim=0)[0].cpu().numpy())
+        bb[3:] = np.maximum(bb[3:], torch.max(points, dim=0)[0].cpu().numpy())
         for j in range(rgba.shape[0]):
             idx.add_item(count, points[j])
             count += 1
         tree[chunk_inds] = rgba
+    print(bb)
+    center = (bb[:3] + bb[3:]) / 2
+    print(center)
+    print(np.linalg.norm(center - bb[:3]))
     print(count)
 
 
@@ -524,11 +533,8 @@ def main(unused_argv):
     idx.save("lego.ann")
     print(len(rgba_data))
     rgba_data = np.concatenate(rgba_data,axis=0)
-    #with torch.no_grad():
-    #    rgba_data = torch.cat(rgba_data)
     print(rgba_data.shape)
     np.savez_compressed("legodata.npz",rgba_data=rgba_data)
-    #torch.save(rgba_data, "legodata.pt")
     tree[:, -1:].relu_()
     tree.shrink_to_fit()
     print(tree)
