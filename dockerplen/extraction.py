@@ -119,7 +119,7 @@ flags.DEFINE_bool(
 )
 flags.DEFINE_enum(
     "masking_mode",
-    "sigma",
+    "weight",
     ["sigma", "weight"],
     "How to calculate mask when building the octree",
 )
